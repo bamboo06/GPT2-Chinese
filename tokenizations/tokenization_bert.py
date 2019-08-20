@@ -22,7 +22,7 @@ import os
 import unicodedata
 from io import open
 
-from pytorch_transformers.tokenization_utils import PreTrainedTokenizer, clean_up_tokenization
+from pytorch_transformers.tokenization_utils import PreTrainedTokenizer
 
 logger = logging.getLogger(__name__)
 
@@ -292,13 +292,9 @@ class BasicTokenizer(object):
         output = []
         for char in text:
             cp = ord(char)
-            if self._is_chinese_char(cp):
+            if self._is_chinese_char(cp) or char.isdigit():
                 output.append(" ")
                 output.append(char)
-                output.append(" ")
-            elif char.isdigit():
-                output.append(" ")
-                output.append("d")
                 output.append(" ")
             else:
                 output.append(char)

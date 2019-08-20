@@ -1,9 +1,12 @@
 import torch
 import torch.nn.functional as F
+import pytorch_transformers
 import os
 import argparse
 from tqdm import trange
 from pytorch_transformers import GPT2LMHeadModel
+
+os.environ["CUDA_VISIBLE_DEVICES"] = "0,1,2,3"  # 此处设置程序使用哪些显卡
 
 
 def is_word(word):
@@ -98,18 +101,20 @@ def sample_sequence(model, length, context, num_samples=1, temperature=1, top_k=
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--device', default='0,1,2,3', type=str, required=False, help='生成设备')
+    parser.add_argument('--device', default='0,1,2,3', type=str, required=False, help='设置使用哪些显卡')
     parser.add_argument('--length', default=-1, type=int, required=False, help='生成长度')
-    parser.add_argument('--batch_size', default=1, type=int, required=False, help='生成的batch size')
-    parser.add_argument('--nsamples', default=10, type=int, required=False, help='生成几个样本')
-    parser.add_argument('--temperature', default=1, type=float, required=False, help='生成温度')
-    parser.add_argument('--topk', default=8, type=int, required=False, help='最高几选一')
-    parser.add_argument('--topp', default=0, type=float, required=False, help='最高积累概率')
+    parser.add_argument('--temperature', default=1, type=float, required=False, help='生成温度，越高越随机')
+    parser.add_argument('--topk', default=8, type=int, required=False, help='生成的时候最高几选一')
+    parser.add_argument('--topp', default=0, type=float, required=False, help='生成的时候积累概率最高多少')
     parser.add_argument('--model_config', default='config/model_config_small.json', type=str, required=False,
-                        help='模型参数')
+                        help='模型参数路径')
     parser.add_argument('--tokenizer_path', default='cache/vocab_small.txt', type=str, required=False, help='词表路径')
     parser.add_argument('--model_path', default='model/final_model', type=str, required=False, help='模型路径')
-    parser.add_argument('--prefix', default='萧炎', type=str, required=False, help='生成文章的开头')
+    parser.add_argument('--save_path', default='generated/', type=str, required=False, help='存放生成的文件的路径')
+    parser.add_argument('--articles_per_title', default=5, type=int, required=False, help='每个标题生成多少篇文章')
+    parser.add_argument('--titles', default='萧炎', type=str, required=False, help='标题列表，是一个字符串，用空格分开')
+    parser.add_argument('--titles_file', default='', type=str, required=False,
+                        help='标题列表文件，文件中每行一个标题。如果这个选项有值则titles无效')
     parser.add_argument('--no_wordpiece', action='store_true', help='不做word piece切词')
     parser.add_argument('--segment', action='store_true', help='中文以词为单位')
 
@@ -125,37 +130,43 @@ def main():
 
     os.environ["CUDA_VISIBLE_DEVICES"] = args.device  # 此处设置程序使用哪些显卡
     length = args.length
-    batch_size = args.batch_size
-    nsamples = args.nsamples
     temperature = args.temperature
     topk = args.topk
     topp = args.topp
+    titles = args.title.split()  # 列表，里面每个元素是一个生成的标题
+    if args.titles_file:
+        with open(args.titles_file, 'r') as f:
+            titles = [line.strip('\n') for line in f.readlines()]
+    articles_per_title = args.articles_per_title  # 这里定义一个标题生成多少篇文章
+    save_path = args.save_path  # 设置存到哪
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
     tokenizer = tokenization_bert.BertTokenizer(vocab_file=args.tokenizer_path)
+    model_config = pytorch_transformers.GPT2Config.from_json_file(args.model_config)
     model = GPT2LMHeadModel.from_pretrained(args.model_path)
     model.to(device)
     model.eval()
 
+    if not os.path.exists(save_path):
+        os.mkdir(save_path)
     if length == -1:
         length = model.config.n_ctx // 2
     elif length > model.config.n_ctx:
         raise ValueError("Can't get samples longer than window size: %s" % model.config.n_ctx)
 
-    while True:
-        raw_text = args.prefix
-        context_tokens = tokenizer.convert_tokens_to_ids(tokenizer.tokenize(raw_text))
-        generated = 0
-        for _ in range(nsamples // batch_size):
-            out = sample_sequence(
-                model=model, length=length,
-                context=context_tokens,
-                temperature=temperature, top_k=topk, top_p=topp, device=device
-            )
-            out = out.tolist()
+    for i, title in enumerate(titles):
+        for j in range(articles_per_title):
+            with open(save_path + str(i * j), 'w') as f:
+                context_tokens = tokenizer.convert_tokens_to_ids(tokenizer.tokenize(title))
+                generated = 0
+                out = sample_sequence(
+                    model=model, length=length,
+                    context=context_tokens,
+                    temperature=temperature, top_k=topk, top_p=topp, device=device
+                )
+                out = out.tolist()
 
-            for i in range(batch_size):
                 generated += 1
                 text = tokenizer.convert_ids_to_tokens(out[0])
 
@@ -168,10 +179,13 @@ def main():
                         text[i] = ''
                     if item == '[CLS]' or item == '[SEP]':
                         text[i] = '\n'
+
                 print("=" * 40 + " SAMPLE " + str(generated) + " " + "=" * 40)
                 text = ''.join(text).replace('##', '').strip()
+                # text = ''.join(text.split('\n')[:-1])
                 print(text)
-        print("=" * 80)
+                f.write(text)
+                print("=" * 80)
 
 
 if __name__ == '__main__':
